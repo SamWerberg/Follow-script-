@@ -1,0 +1,796 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+--==================================================
+-- VARIABLES
+--==================================================
+
+local humanoid
+local character
+
+local canJump = true
+
+local targetPlayer = nil
+local following = false
+local followLocked = false
+
+local targetJumpConnection = nil
+local targetCharacterConnection = nil
+local targetToolConnection = nil
+local targetToolRemovedConnection = nil
+
+--==================================================
+-- CREATE GUI
+--==================================================
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "JumpFollowGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = player:WaitForChild("PlayerGui")
+
+-- Main frame
+local frame = Instance.new("Frame")
+frame.Name = "MainFrame"
+frame.Size = UDim2.fromOffset(300, 280)
+frame.Position = UDim2.new(0.5, -150, 0.5, -140)
+frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 12)
+frameCorner.Parent = frame
+
+--==================================================
+-- TITLE / DRAG BAR
+--==================================================
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(1, 0, 0, 42)
+title.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+title.BorderSizePixel = 0
+title.Text = "Jump + Follow GUI"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 18
+title.Font = Enum.Font.GothamBold
+title.Parent = frame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 12)
+titleCorner.Parent = title
+
+--==================================================
+-- USERNAME TEXTBOX
+--==================================================
+
+local usernameBox = Instance.new("TextBox")
+usernameBox.Name = "UsernameBox"
+usernameBox.Size = UDim2.fromOffset(260, 42)
+usernameBox.Position = UDim2.new(0.5, -130, 0, 55)
+usernameBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+usernameBox.BorderSizePixel = 0
+usernameBox.PlaceholderText = "Enter username..."
+usernameBox.PlaceholderColor3 = Color3.fromRGB(170, 170, 170)
+usernameBox.Text = ""
+usernameBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+usernameBox.TextSize = 16
+usernameBox.Font = Enum.Font.Gotham
+usernameBox.ClearTextOnFocus = false
+usernameBox.Parent = frame
+
+local boxCorner = Instance.new("UICorner")
+boxCorner.CornerRadius = UDim.new(0, 8)
+boxCorner.Parent = usernameBox
+
+--==================================================
+-- FOLLOW BUTTON
+--==================================================
+
+local followButton = Instance.new("TextButton")
+followButton.Name = "FollowButton"
+followButton.Size = UDim2.fromOffset(125, 42)
+followButton.Position = UDim2.new(0, 20, 0, 108)
+followButton.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+followButton.BorderSizePixel = 0
+followButton.Text = "FOLLOW"
+followButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+followButton.TextSize = 17
+followButton.Font = Enum.Font.GothamBold
+followButton.Parent = frame
+
+local followCorner = Instance.new("UICorner")
+followCorner.CornerRadius = UDim.new(0, 8)
+followCorner.Parent = followButton
+
+--==================================================
+-- JUMP BUTTON
+--==================================================
+
+local jumpButton = Instance.new("TextButton")
+jumpButton.Name = "JumpButton"
+jumpButton.Size = UDim2.fromOffset(125, 42)
+jumpButton.Position = UDim2.new(0, 155, 0, 108)
+jumpButton.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+jumpButton.BorderSizePixel = 0
+jumpButton.Text = "JUMP"
+jumpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpButton.TextSize = 17
+jumpButton.Font = Enum.Font.GothamBold
+jumpButton.Parent = frame
+
+local jumpCorner = Instance.new("UICorner")
+jumpCorner.CornerRadius = UDim.new(0, 8)
+jumpCorner.Parent = jumpButton
+
+--==================================================
+-- STATUS DISPLAY
+--==================================================
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Name = "Status"
+statusLabel.Size = UDim2.fromOffset(260, 70)
+statusLabel.Position = UDim2.new(0.5, -130, 0, 160)
+statusLabel.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+statusLabel.BorderSizePixel = 0
+statusLabel.Text = "Status: Not following"
+statusLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+statusLabel.TextSize = 14
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextWrapped = true
+statusLabel.Parent = frame
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 8)
+statusCorner.Parent = statusLabel
+
+--==================================================
+-- STATUS FUNCTION
+--==================================================
+
+local function setStatus(text, color)
+	statusLabel.Text = "Status: " .. text
+
+	if color then
+		statusLabel.TextColor3 = color
+	else
+		statusLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+	end
+end
+
+--==================================================
+-- FIND PLAYER
+--==================================================
+
+local function findPlayer(searchText)
+
+	searchText = string.lower(searchText)
+
+	if searchText == "" then
+		return nil
+	end
+
+	-- Exact username
+	for _, p in ipairs(Players:GetPlayers()) do
+		if string.lower(p.Name) == searchText then
+			return p
+		end
+	end
+
+	-- Exact display name
+	for _, p in ipairs(Players:GetPlayers()) do
+		if string.lower(p.DisplayName) == searchText then
+			return p
+		end
+	end
+
+	-- Partial username
+	for _, p in ipairs(Players:GetPlayers()) do
+		if string.find(string.lower(p.Name), searchText, 1, true) then
+			return p
+		end
+	end
+
+	-- Partial display name
+	for _, p in ipairs(Players:GetPlayers()) do
+		if string.find(string.lower(p.DisplayName), searchText, 1, true) then
+			return p
+		end
+	end
+
+	return nil
+end
+
+--==================================================
+-- DISCONNECT TARGET CONNECTIONS
+--==================================================
+
+local function disconnectTargetConnections()
+
+	if targetJumpConnection then
+		targetJumpConnection:Disconnect()
+		targetJumpConnection = nil
+	end
+
+	if targetCharacterConnection then
+		targetCharacterConnection:Disconnect()
+		targetCharacterConnection = nil
+	end
+
+	if targetToolConnection then
+		targetToolConnection:Disconnect()
+		targetToolConnection = nil
+	end
+
+	if targetToolRemovedConnection then
+		targetToolRemovedConnection:Disconnect()
+		targetToolRemovedConnection = nil
+	end
+end
+
+--==================================================
+-- UNEQUIP OUR TOOL
+--==================================================
+
+local function unequipOurTool()
+
+	if not humanoid then
+		return
+	end
+
+	-- Humanoid:UnequipTools() moves equipped tools
+	-- back into the player's Backpack.
+	humanoid:UnequipTools()
+end
+
+--==================================================
+-- EQUIP SAME TOOL
+--==================================================
+
+local function equipTargetTool(toolName)
+
+	if not humanoid then
+		return
+	end
+
+	if not character then
+		return
+	end
+
+	if not toolName or toolName == "" then
+		return
+	end
+
+	-- Already holding the correct tool
+	local currentTool = character:FindFirstChildOfClass("Tool")
+
+	if currentTool and currentTool.Name == toolName then
+		return
+	end
+
+	local backpack = player:FindFirstChildOfClass("Backpack")
+
+	if not backpack then
+		return
+	end
+
+	local matchingTool = backpack:FindFirstChild(toolName)
+
+	if matchingTool and matchingTool:IsA("Tool") then
+		humanoid:EquipTool(matchingTool)
+	end
+end
+
+--==================================================
+-- CHECK TARGET'S CURRENT TOOL
+--==================================================
+
+local function checkTargetTool()
+
+	if not targetPlayer then
+		return
+	end
+
+	local targetCharacter = targetPlayer.Character
+
+	if not targetCharacter then
+		return
+	end
+
+	local tool = targetCharacter:FindFirstChildOfClass("Tool")
+
+	if tool then
+
+		-- Target has a tool equipped.
+		-- Equip our matching copy.
+		equipTargetTool(tool.Name)
+
+	else
+
+		-- Target has NO tool equipped.
+		-- Unequip ours too.
+		unequipOurTool()
+	end
+end
+
+--==================================================
+-- CONNECT TOOL DETECTION
+--==================================================
+
+local function connectTargetToolDetection()
+
+	if not targetPlayer then
+		return
+	end
+
+	local targetCharacter = targetPlayer.Character
+
+	if not targetCharacter then
+		return
+	end
+
+	-- Disconnect old tool listeners
+	if targetToolConnection then
+		targetToolConnection:Disconnect()
+		targetToolConnection = nil
+	end
+
+	if targetToolRemovedConnection then
+		targetToolRemovedConnection:Disconnect()
+		targetToolRemovedConnection = nil
+	end
+
+	-- Detect when a Tool gets equipped.
+	targetToolConnection = targetCharacter.ChildAdded:Connect(function(child)
+
+		if not following then
+			return
+		end
+
+		if child:IsA("Tool") then
+			task.wait()
+			equipTargetTool(child.Name)
+		end
+	end)
+
+	-- Detect when the equipped Tool gets removed.
+	targetToolRemovedConnection = targetCharacter.ChildRemoved:Connect(function(child)
+
+		if not following then
+			return
+		end
+
+		if child:IsA("Tool") then
+
+			task.wait()
+
+			-- Check whether they equipped another Tool.
+			local newTool = targetCharacter:FindFirstChildOfClass("Tool")
+
+			if newTool then
+				equipTargetTool(newTool.Name)
+			else
+				-- They completely unequipped.
+				unequipOurTool()
+			end
+		end
+	end)
+
+	-- Sync immediately.
+	checkTargetTool()
+end
+
+--==================================================
+-- CONNECT TO TARGET
+--==================================================
+
+local function connectToTarget()
+
+	disconnectTargetConnections()
+
+	if not targetPlayer then
+		return
+	end
+
+	-- Detect target respawning
+	targetCharacterConnection = targetPlayer.CharacterAdded:Connect(function(newCharacter)
+
+		if not following then
+			return
+		end
+
+		local targetHumanoid =
+			newCharacter:WaitForChild("Humanoid", 5)
+
+		if targetHumanoid then
+
+			targetJumpConnection =
+				targetHumanoid.StateChanged:Connect(function(_, newState)
+
+					if not following then
+						return
+					end
+
+					if newState == Enum.HumanoidStateType.Jumping then
+
+						if humanoid and humanoid.Health > 0 then
+							humanoid.Jump = true
+							humanoid:ChangeState(
+								Enum.HumanoidStateType.Jumping
+							)
+						end
+					end
+				end)
+		end
+
+		-- Reconnect tool detection after target respawns
+		task.wait()
+		connectTargetToolDetection()
+	end)
+
+	-- Current target character
+	local targetCharacter = targetPlayer.Character
+
+	if targetCharacter then
+
+		local targetHumanoid =
+			targetCharacter:FindFirstChildOfClass("Humanoid")
+
+		if targetHumanoid then
+
+			targetJumpConnection =
+				targetHumanoid.StateChanged:Connect(function(_, newState)
+
+					if not following then
+						return
+					end
+
+					if newState == Enum.HumanoidStateType.Jumping then
+
+						if humanoid and humanoid.Health > 0 then
+							humanoid.Jump = true
+							humanoid:ChangeState(
+								Enum.HumanoidStateType.Jumping
+							)
+						end
+					end
+				end)
+		end
+
+		connectTargetToolDetection()
+	end
+end
+
+--==================================================
+-- FOLLOW TARGET
+--==================================================
+
+RunService.Heartbeat:Connect(function()
+
+	if not following then
+		return
+	end
+
+	if followLocked then
+		return
+	end
+
+	if not targetPlayer then
+		return
+	end
+
+	if not humanoid then
+		return
+	end
+
+	if humanoid.Health <= 0 then
+		return
+	end
+
+	local targetCharacter = targetPlayer.Character
+
+	if not targetCharacter then
+		return
+	end
+
+	local targetRoot =
+		targetCharacter:FindFirstChild("HumanoidRootPart")
+
+	local myRoot =
+		character and character:FindFirstChild("HumanoidRootPart")
+
+	if not targetRoot or not myRoot then
+		return
+	end
+
+	-- Follow 4 studs behind target
+	local targetPosition =
+		targetRoot.Position
+		- targetRoot.CFrame.LookVector * 4
+
+	humanoid:MoveTo(targetPosition)
+end)
+
+--==================================================
+-- FOLLOW BUTTON
+--==================================================
+
+followButton.Activated:Connect(function()
+
+	if followLocked then
+
+		setStatus(
+			"Locked after death. Let " ..
+			(targetPlayer and targetPlayer.Name or "the target") ..
+			" touch you.",
+			Color3.fromRGB(255, 180, 70)
+		)
+
+		return
+	end
+
+	-- Stop following
+	if following then
+
+		following = false
+
+		disconnectTargetConnections()
+
+		followButton.Text = "FOLLOW"
+		followButton.BackgroundColor3 =
+			Color3.fromRGB(0, 170, 90)
+
+		setStatus(
+			"Not following",
+			Color3.fromRGB(220, 220, 220)
+		)
+
+		return
+	end
+
+	-- Find target
+	local foundPlayer = findPlayer(usernameBox.Text)
+
+	if not foundPlayer then
+
+		setStatus(
+			"Player not found. Try part of their username.",
+			Color3.fromRGB(255, 100, 100)
+		)
+
+		return
+	end
+
+	if foundPlayer == player then
+
+		setStatus(
+			"You cannot follow yourself.",
+			Color3.fromRGB(255, 100, 100)
+		)
+
+		return
+	end
+
+	targetPlayer = foundPlayer
+	following = true
+
+	followButton.Text = "STOP"
+	followButton.BackgroundColor3 =
+		Color3.fromRGB(200, 60, 60)
+
+	setStatus(
+		"Following " ..
+		targetPlayer.DisplayName ..
+		" (@" ..
+		targetPlayer.Name ..
+		")",
+		Color3.fromRGB(100, 255, 150)
+	)
+
+	connectToTarget()
+end)
+
+--==================================================
+-- ONE JUMP PER LANDING
+--==================================================
+
+jumpButton.Activated:Connect(function()
+
+	if not humanoid then
+		return
+	end
+
+	if humanoid.Health <= 0 then
+		return
+	end
+
+	if not canJump then
+		return
+	end
+
+	canJump = false
+
+	jumpButton.Text = "WAIT..."
+	jumpButton.BackgroundColor3 =
+		Color3.fromRGB(90, 90, 90)
+
+	humanoid.Jump = true
+	humanoid:ChangeState(
+		Enum.HumanoidStateType.Jumping
+	)
+end)
+
+--==================================================
+-- CHARACTER SETUP
+--==================================================
+
+local function setupCharacter(newCharacter)
+
+	character = newCharacter
+	humanoid = character:WaitForChild("Humanoid")
+
+	canJump = true
+
+	jumpButton.Text = "JUMP"
+	jumpButton.BackgroundColor3 =
+		Color3.fromRGB(0, 140, 255)
+
+	-- If locked after death
+	if followLocked then
+
+		following = false
+
+		followButton.Text = "LOCKED"
+		followButton.BackgroundColor3 =
+			Color3.fromRGB(120, 80, 30)
+
+		setStatus(
+			"Locked. " ..
+			(targetPlayer and targetPlayer.Name or "Target") ..
+			" must touch you.",
+			Color3.fromRGB(255, 190, 80)
+		)
+	end
+
+	-- One jump per landing
+	humanoid.StateChanged:Connect(function(_, newState)
+
+		if newState == Enum.HumanoidStateType.Landed
+			or newState == Enum.HumanoidStateType.Running then
+
+			canJump = true
+
+			jumpButton.Text = "JUMP"
+			jumpButton.BackgroundColor3 =
+				Color3.fromRGB(0, 140, 255)
+		end
+	end)
+
+	-- Detect death
+	humanoid.Died:Connect(function()
+
+		following = false
+		followLocked = true
+
+		disconnectTargetConnections()
+
+		followButton.Text = "LOCKED"
+		followButton.BackgroundColor3 =
+			Color3.fromRGB(120, 80, 30)
+
+		setStatus(
+			"Dead. After respawning, " ..
+			(targetPlayer and targetPlayer.Name or "the target") ..
+			" must touch you.",
+			Color3.fromRGB(255, 100, 100)
+		)
+	end)
+
+	--==================================================
+	-- TOUCH UNLOCK
+	--==================================================
+
+	for _, part in ipairs(character:GetDescendants()) do
+
+		if part:IsA("BasePart") then
+
+			part.Touched:Connect(function(hit)
+
+				if not followLocked then
+					return
+				end
+
+				if not targetPlayer then
+					return
+				end
+
+				local targetCharacter =
+					targetPlayer.Character
+
+				if not targetCharacter then
+					return
+				end
+
+				local touchedCharacter =
+					hit:FindFirstAncestorOfClass("Model")
+
+				if touchedCharacter == targetCharacter then
+
+					followLocked = false
+					following = true
+
+					followButton.Text = "STOP"
+					followButton.BackgroundColor3 =
+						Color3.fromRGB(200, 60, 60)
+
+					setStatus(
+						"Unlocked! Following " ..
+						targetPlayer.DisplayName,
+						Color3.fromRGB(100, 255, 150)
+					)
+
+					connectToTarget()
+				end
+			end)
+		end
+	end
+end
+
+if player.Character then
+	setupCharacter(player.Character)
+end
+
+player.CharacterAdded:Connect(setupCharacter)
+
+--==================================================
+-- DRAGGING
+--==================================================
+
+local dragging = false
+local dragStart
+local startPosition
+
+title.InputBegan:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		dragging = true
+		dragStart = input.Position
+		startPosition = frame.Position
+	end
+end)
+
+title.InputEnded:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		dragging = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+
+	if not dragging then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		local delta = input.Position - dragStart
+
+		frame.Position = UDim2.new(
+			startPosition.X.Scale,
+			startPosition.X.Offset + delta.X,
+
+			startPosition.Y.Scale,
+			startPosition.Y.Offset + delta.Y
+		)
+	end
+end)
