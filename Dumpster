@@ -8,25 +8,26 @@ local player = Players.LocalPlayer
 -- VARIABLES
 --==================================================
 
-local character = nil
-local humanoid = nil
-local rootPart = nil
+local character
+local humanoid
+local rootPart
 
-local targetPlayer = nil
-local targetCharacter = nil
-local targetHumanoid = nil
-local targetRoot = nil
+local targetPlayer
+local targetCharacter
+local targetHumanoid
+local targetRoot
 
 local following = false
 local followLocked = false
 
-local canManualJump = true
-local targetJumpCooldown = false
+local canJump = true
+local targetJumping = false
+local targetJumpDebounce = false
 
 local connections = {}
 
 --==================================================
--- CONNECTION CLEANUP
+-- CONNECTION MANAGEMENT
 --==================================================
 
 local function disconnect(name)
@@ -36,17 +37,19 @@ local function disconnect(name)
 	end
 end
 
-local function disconnectAllTargetConnections()
-
-	disconnect("TargetCharacterAdded")
-	disconnect("TargetHumanoidState")
+local function disconnectTarget()
+	disconnect("TargetCharacter")
+	disconnect("TargetState")
 	disconnect("TargetDied")
-	disconnect("TargetChildAdded")
-	disconnect("TargetChildRemoved")
+	disconnect("TargetAdded")
+	disconnect("TargetRemoved")
 
 	targetCharacter = nil
 	targetHumanoid = nil
 	targetRoot = nil
+
+	targetJumping = false
+	targetJumpDebounce = false
 end
 
 --==================================================
@@ -58,10 +61,6 @@ gui.Name = "JumpFollowGui"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.Parent = player:WaitForChild("PlayerGui")
-
---==================================================
--- MAIN FRAME
---==================================================
 
 local frame = Instance.new("Frame")
 frame.Name = "MainFrame"
@@ -104,7 +103,7 @@ usernameBox.Size = UDim2.fromOffset(260, 42)
 usernameBox.Position = UDim2.new(0.5, -130, 0, 55)
 usernameBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 usernameBox.BorderSizePixel = 0
-usernameBox.PlaceholderText = "Enter username..."
+usernameBox.PlaceholderText = "Username / Display Name..."
 usernameBox.PlaceholderColor3 = Color3.fromRGB(170, 170, 170)
 usernameBox.Text = ""
 usernameBox.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -180,7 +179,6 @@ statusCorner.Parent = statusLabel
 
 local function setStatus(text, color)
 	statusLabel.Text = "Status: " .. text
-
 	statusLabel.TextColor3 =
 		color or Color3.fromRGB(220, 220, 220)
 end
@@ -189,26 +187,24 @@ end
 -- FIND PLAYER
 --==================================================
 
-local function findPlayer(searchText)
+local function findPlayer(search)
 
-	searchText = string.lower(
-		string.gsub(searchText, "^%s*(.-)%s*$", "%1")
-	)
+	search = string.lower(search or "")
 
-	if searchText == "" then
+	if search == "" then
 		return nil
 	end
 
 	-- Exact username
 	for _, p in ipairs(Players:GetPlayers()) do
-		if string.lower(p.Name) == searchText then
+		if string.lower(p.Name) == search then
 			return p
 		end
 	end
 
 	-- Exact display name
 	for _, p in ipairs(Players:GetPlayers()) do
-		if string.lower(p.DisplayName) == searchText then
+		if string.lower(p.DisplayName) == search then
 			return p
 		end
 	end
@@ -217,7 +213,7 @@ local function findPlayer(searchText)
 	for _, p in ipairs(Players:GetPlayers()) do
 		if string.find(
 			string.lower(p.Name),
-			searchText,
+			search,
 			1,
 			true
 		) then
@@ -229,7 +225,7 @@ local function findPlayer(searchText)
 	for _, p in ipairs(Players:GetPlayers()) do
 		if string.find(
 			string.lower(p.DisplayName),
-			searchText,
+			search,
 			1,
 			true
 		) then
@@ -241,48 +237,31 @@ local function findPlayer(searchText)
 end
 
 --==================================================
--- OUR CHARACTER VALIDATION
+-- CHARACTER CHECK
 --==================================================
 
-local function isOurCharacterAlive()
+local function alive()
 
-	if not character then
-		return false
-	end
-
-	if not humanoid then
-		return false
-	end
-
-	if humanoid.Health <= 0 then
-		return false
-	end
-
-	if character.Parent == nil then
-		return false
-	end
-
-	return true
+	return character
+		and character.Parent
+		and humanoid
+		and humanoid.Health > 0
+		and rootPart
 end
 
 --==================================================
--- TARGET VALIDATION
+-- TARGET REFERENCES
 --==================================================
 
-local function updateTargetReferences()
+local function updateTarget()
 
 	if not targetPlayer then
-		targetCharacter = nil
-		targetHumanoid = nil
-		targetRoot = nil
 		return false
 	end
 
 	targetCharacter = targetPlayer.Character
 
 	if not targetCharacter then
-		targetHumanoid = nil
-		targetRoot = nil
 		return false
 	end
 
@@ -292,48 +271,27 @@ local function updateTargetReferences()
 	targetRoot =
 		targetCharacter:FindFirstChild("HumanoidRootPart")
 
-	if not targetHumanoid or not targetRoot then
-		return false
-	end
-
-	if targetHumanoid.Health <= 0 then
-		return false
-	end
-
-	return true
+	return targetHumanoid ~= nil
+		and targetRoot ~= nil
+		and targetHumanoid.Health > 0
 end
 
 --==================================================
--- UNEQUIP OUR TOOL
+-- TOOL SYNC
 --==================================================
 
-local function unequipOurTool()
+local function unequipTool()
 
-	if not isOurCharacterAlive() then
+	if not alive() then
 		return
 	end
 
 	humanoid:UnequipTools()
 end
 
---==================================================
--- EQUIP MATCHING TOOL
---==================================================
+local function equipTool(toolName)
 
-local function equipMatchingTool(toolName)
-
-	if not isOurCharacterAlive() then
-		return
-	end
-
-	if not toolName or toolName == "" then
-		return
-	end
-
-	local currentTool =
-		character:FindFirstChildOfClass("Tool")
-
-	if currentTool and currentTool.Name == toolName then
+	if not alive() then
 		return
 	end
 
@@ -344,25 +302,28 @@ local function equipMatchingTool(toolName)
 		return
 	end
 
-	local matchingTool =
+	local current =
+		character:FindFirstChildOfClass("Tool")
+
+	if current and current.Name == toolName then
+		return
+	end
+
+	local tool =
 		backpack:FindFirstChild(toolName)
 
-	if matchingTool and matchingTool:IsA("Tool") then
-		humanoid:EquipTool(matchingTool)
+	if tool and tool:IsA("Tool") then
+		humanoid:EquipTool(tool)
 	end
 end
 
---==================================================
--- SYNC TARGET TOOL
---==================================================
-
-local function syncTargetTool()
+local function syncTool()
 
 	if not following then
 		return
 	end
 
-	if not updateTargetReferences() then
+	if not updateTarget() then
 		return
 	end
 
@@ -370,27 +331,22 @@ local function syncTargetTool()
 		targetCharacter:FindFirstChildOfClass("Tool")
 
 	if targetTool then
-		equipMatchingTool(targetTool.Name)
+		equipTool(targetTool.Name)
 	else
-		unequipOurTool()
+		unequipTool()
 	end
 end
 
---==================================================
--- CONNECT TARGET TOOL EVENTS
---==================================================
-
-local function connectTargetToolEvents()
+local function connectToolSync()
 
 	if not targetCharacter then
 		return
 	end
 
-	disconnect("TargetChildAdded")
-	disconnect("TargetChildRemoved")
+	disconnect("TargetAdded")
+	disconnect("TargetRemoved")
 
-	-- Target equips a tool
-	connections.TargetChildAdded =
+	connections.TargetAdded =
 		targetCharacter.ChildAdded:Connect(function(child)
 
 			if not following then
@@ -399,18 +355,14 @@ local function connectTargetToolEvents()
 
 			if child:IsA("Tool") then
 				task.defer(function()
-
-					if following and
-						isOurCharacterAlive() then
-
-						equipMatchingTool(child.Name)
+					if following then
+						equipTool(child.Name)
 					end
 				end)
 			end
 		end)
 
-	-- Target removes a tool
-	connections.TargetChildRemoved =
+	connections.TargetRemoved =
 		targetCharacter.ChildRemoved:Connect(function(child)
 
 			if not following then
@@ -427,29 +379,29 @@ local function connectTargetToolEvents()
 					return
 				end
 
-				if not updateTargetReferences() then
+				if not updateTarget() then
 					return
 				end
 
-				local replacement =
+				local newTool =
 					targetCharacter:FindFirstChildOfClass("Tool")
 
-				if replacement then
-					equipMatchingTool(replacement.Name)
+				if newTool then
+					equipTool(newTool.Name)
 				else
-					unequipOurTool()
+					unequipTool()
 				end
 			end)
 		end)
 
-	syncTargetTool()
+	syncTool()
 end
 
 --==================================================
--- TARGET JUMP DETECTION
+-- MIRROR JUMP
 --==================================================
 
-local function tryMirrorTargetJump()
+local function mirrorJump()
 
 	if not following then
 		return
@@ -459,68 +411,67 @@ local function tryMirrorTargetJump()
 		return
 	end
 
-	if targetJumpCooldown then
+	if not alive() then
 		return
 	end
 
-	if not isOurCharacterAlive() then
+	-- VERY IMPORTANT:
+	-- Only allow the mirrored jump if WE are
+	-- currently standing on the ground.
+	if humanoid.FloorMaterial == Enum.Material.Air then
 		return
 	end
 
-	if not updateTargetReferences() then
+	if not canJump then
 		return
 	end
 
-	-- Don't jump if we're already airborne.
-	local floorMaterial = humanoid.FloorMaterial
-
-	if floorMaterial == Enum.Material.Air then
+	if targetJumpDebounce then
 		return
 	end
 
-	-- Target must actually be moving upward.
-	local targetVelocity =
-		targetRoot.AssemblyLinearVelocity
+	targetJumpDebounce = true
+	canJump = false
 
-	if targetVelocity.Y < 1 then
-		return
-	end
-
-	-- Prevent multiple jumps from one target jump.
-	targetJumpCooldown = true
-
+	-- Use Jump property rather than repeatedly
+	-- forcing the Humanoid state.
 	humanoid.Jump = true
 
-	-- Let the target jump finish before another
-	-- target jump can be mirrored.
-	task.delay(0.35, function()
-		targetJumpCooldown = false
+	jumpButton.Text = "WAIT..."
+	jumpButton.BackgroundColor3 =
+		Color3.fromRGB(90, 90, 90)
+
+	-- Safety release. Actual landing below
+	-- will also release canJump.
+	task.delay(1.5, function()
+
+		if targetJumpDebounce then
+			targetJumpDebounce = false
+		end
 	end)
 end
 
 --==================================================
--- TARGET CONNECTIONS
+-- CONNECT TARGET
 --==================================================
 
 local function connectTarget()
 
-	disconnectAllTargetConnections()
+	disconnectTarget()
 
 	if not targetPlayer then
 		return
 	end
 
-	updateTargetReferences()
-
-	if not targetCharacter then
+	if not updateTarget() then
 		return
 	end
 
 	--==================================================
-	-- TARGET JUMP / STATE MONITOR
+	-- TARGET JUMP EVENT
 	--==================================================
 
-	connections.TargetHumanoidState =
+	connections.TargetState =
 		targetHumanoid.StateChanged:Connect(
 			function(_, newState)
 
@@ -528,21 +479,11 @@ local function connectTarget()
 					return
 				end
 
-				-- Jumping state catches normal jumps.
+				-- This is the main jump detector.
 				if newState ==
 					Enum.HumanoidStateType.Jumping then
 
-					tryMirrorTargetJump()
-
-					return
-				end
-
-				-- Freefall with upward velocity catches
-				-- jumps that transition too quickly.
-				if newState ==
-					Enum.HumanoidStateType.Freefall then
-
-					tryMirrorTargetJump()
+					mirrorJump()
 				end
 			end
 		)
@@ -554,14 +495,10 @@ local function connectTarget()
 	connections.TargetDied =
 		targetHumanoid.Died:Connect(function()
 
-			if not following then
-				return
-			end
-
 			following = false
-			targetJumpCooldown = false
+			targetJumpDebounce = false
 
-			disconnectAllTargetConnections()
+			disconnectTarget()
 
 			followButton.Text = "FOLLOW"
 			followButton.BackgroundColor3 =
@@ -577,51 +514,49 @@ local function connectTarget()
 	-- TARGET RESPAWN
 	--==================================================
 
-	connections.TargetCharacterAdded =
-		targetPlayer.CharacterAdded:Connect(function(newCharacter)
+	connections.TargetCharacter =
+		targetPlayer.CharacterAdded:Connect(
+			function(newCharacter)
 
-			if not following then
-				return
+				if not following then
+					return
+				end
+
+				local newHumanoid =
+					newCharacter:WaitForChild(
+						"Humanoid",
+						5
+					)
+
+				local newRoot =
+					newCharacter:WaitForChild(
+						"HumanoidRootPart",
+						5
+					)
+
+				if not newHumanoid or not newRoot then
+					return
+				end
+
+				if not following then
+					return
+				end
+
+				-- Reconnect cleanly.
+				connectTarget()
 			end
+		)
 
-			-- Wait for the new character to be ready.
-			local newHumanoid =
-				newCharacter:WaitForChild(
-					"Humanoid",
-					5
-				)
-
-			local newRoot =
-				newCharacter:WaitForChild(
-					"HumanoidRootPart",
-					5
-				)
-
-			if not newHumanoid or not newRoot then
-				return
-			end
-
-			if not following then
-				return
-			end
-
-			targetCharacter = newCharacter
-			targetHumanoid = newHumanoid
-			targetRoot = newRoot
-
-			connectTarget()
-		end)
-
-	connectTargetToolEvents()
+	connectToolSync()
 end
 
 --==================================================
 -- FOLLOW MOVEMENT
 --==================================================
 
-local lastMovePosition = nil
+local lastMove = nil
 
-local function updateFollowMovement()
+local function followTarget()
 
 	if not following then
 		return
@@ -631,57 +566,36 @@ local function updateFollowMovement()
 		return
 	end
 
-	if not isOurCharacterAlive() then
+	if not alive() then
 		return
 	end
 
-	if not updateTargetReferences() then
+	if not updateTarget() then
 		return
 	end
 
-	-- Don't move toward a dead target.
-	if targetHumanoid.Health <= 0 then
-		return
-	end
-
-	-- Keep a little distance behind the target.
-	local desiredPosition =
+	local targetPosition =
 		targetRoot.Position
 		- targetRoot.CFrame.LookVector * 4
 
-	-- Don't constantly send identical MoveTo calls.
-	if lastMovePosition then
-
-		local difference =
-			(desiredPosition - lastMovePosition).Magnitude
-
-		if difference < 0.15 then
+	-- Only update MoveTo when necessary.
+	if lastMove then
+		if (targetPosition - lastMove).Magnitude < 0.2 then
 			return
 		end
 	end
 
-	lastMovePosition = desiredPosition
+	lastMove = targetPosition
 
-	humanoid:MoveTo(desiredPosition)
+	humanoid:MoveTo(targetPosition)
 end
 
---==================================================
--- FOLLOW HEARTBEAT
---==================================================
-
-connections.FollowHeartbeat =
+connections.FollowLoop =
 	RunService.Heartbeat:Connect(function()
 
-		if not following then
-			return
+		if following then
+			followTarget()
 		end
-
-		-- Completely stop if our character is dead.
-		if not isOurCharacterAlive() then
-			return
-		end
-
-		updateFollowMovement()
 	end)
 
 --==================================================
@@ -690,14 +604,13 @@ connections.FollowHeartbeat =
 
 followButton.Activated:Connect(function()
 
-	-- Locked after death
 	if followLocked then
 
 		setStatus(
 			"Locked. " ..
 			(targetPlayer and
 				targetPlayer.Name or
-				"Target") ..
+				"the target") ..
 			" must touch you.",
 			Color3.fromRGB(255, 180, 70)
 		)
@@ -705,14 +618,13 @@ followButton.Activated:Connect(function()
 		return
 	end
 
-	-- Stop following
+	-- Stop
 	if following then
 
 		following = false
-		lastMovePosition = nil
-		targetJumpCooldown = false
+		lastMove = nil
 
-		disconnectAllTargetConnections()
+		disconnectTarget()
 
 		followButton.Text = "FOLLOW"
 		followButton.BackgroundColor3 =
@@ -726,21 +638,20 @@ followButton.Activated:Connect(function()
 		return
 	end
 
-	-- Find target
-	local foundPlayer =
+	local found =
 		findPlayer(usernameBox.Text)
 
-	if not foundPlayer then
+	if not found then
 
 		setStatus(
-			"Player not found. Try part of their username.",
+			"Player not found.",
 			Color3.fromRGB(255, 100, 100)
 		)
 
 		return
 	end
 
-	if foundPlayer == player then
+	if found == player then
 
 		setStatus(
 			"You cannot follow yourself.",
@@ -750,10 +661,11 @@ followButton.Activated:Connect(function()
 		return
 	end
 
-	targetPlayer = foundPlayer
+	targetPlayer = found
 	following = true
-	lastMovePosition = nil
-	targetJumpCooldown = false
+
+	lastMove = nil
+	targetJumpDebounce = false
 
 	followButton.Text = "STOP"
 	followButton.BackgroundColor3 =
@@ -777,21 +689,20 @@ end)
 
 jumpButton.Activated:Connect(function()
 
-	if not isOurCharacterAlive() then
+	if not alive() then
 		return
 	end
 
-	if not canManualJump then
+	if not canJump then
 		return
 	end
 
-	-- Must actually be standing on something.
 	if humanoid.FloorMaterial ==
 		Enum.Material.Air then
 		return
 	end
 
-	canManualJump = false
+	canJump = false
 
 	jumpButton.Text = "WAIT..."
 	jumpButton.BackgroundColor3 =
@@ -801,7 +712,7 @@ jumpButton.Activated:Connect(function()
 end)
 
 --==================================================
--- CHARACTER SETUP
+-- OUR CHARACTER
 --==================================================
 
 local function setupCharacter(newCharacter)
@@ -812,50 +723,35 @@ local function setupCharacter(newCharacter)
 		newCharacter:WaitForChild("Humanoid")
 
 	rootPart =
-		newCharacter:WaitForChild("HumanoidRootPart")
+		newCharacter:WaitForChild(
+			"HumanoidRootPart"
+		)
 
-	canManualJump = true
-	targetJumpCooldown = false
-	lastMovePosition = nil
+	canJump = true
+	targetJumpDebounce = false
+	lastMove = nil
 
 	jumpButton.Text = "JUMP"
 	jumpButton.BackgroundColor3 =
 		Color3.fromRGB(0, 140, 255)
 
 	--==================================================
-	-- AFTER DEATH LOCK
+	-- LANDING
 	--==================================================
 
-	if followLocked then
-
-		following = false
-
-		followButton.Text = "LOCKED"
-		followButton.BackgroundColor3 =
-			Color3.fromRGB(120, 80, 30)
-
-		setStatus(
-			"Locked. " ..
-			(targetPlayer and
-				targetPlayer.Name or
-				"Target") ..
-			" must touch you.",
-			Color3.fromRGB(255, 190, 80)
-		)
-	end
-
-	--==================================================
-	-- LANDING DETECTION
-	--==================================================
+	disconnect("OurState")
 
 	connections.OurState =
 		humanoid.StateChanged:Connect(
 			function(_, newState)
 
 				if newState ==
-					Enum.HumanoidStateType.Landed then
+					Enum.HumanoidStateType.Landed
+					or newState ==
+					Enum.HumanoidStateType.Running then
 
-					canManualJump = true
+					canJump = true
+					targetJumpDebounce = false
 
 					jumpButton.Text = "JUMP"
 					jumpButton.BackgroundColor3 =
@@ -865,23 +761,23 @@ local function setupCharacter(newCharacter)
 		)
 
 	--==================================================
-	-- OUR DEATH
+	-- DEATH
 	--==================================================
+
+	disconnect("OurDeath")
 
 	connections.OurDeath =
 		humanoid.Died:Connect(function()
 
-			-- FIRST:
-			-- Stop every action that could continue
-			-- controlling the old character.
+			-- Absolutely stop following before respawn.
 			following = false
-			targetJumpCooldown = false
-			lastMovePosition = nil
+			lastMove = nil
+			targetJumpDebounce = false
 
-			disconnectAllTargetConnections()
+			disconnectTarget()
 
-			-- Lock following until target touches us
-			-- after respawn.
+			-- Lock until target physically touches
+			-- the new character.
 			followLocked = true
 
 			followButton.Text = "LOCKED"
@@ -889,11 +785,7 @@ local function setupCharacter(newCharacter)
 				Color3.fromRGB(120, 80, 30)
 
 			setStatus(
-				"Dead. After respawning, " ..
-				(targetPlayer and
-					targetPlayer.Name or
-					"the target") ..
-				" must touch you.",
+				"Dead. Respawn and let the target touch you.",
 				Color3.fromRGB(255, 100, 100)
 			)
 		end)
@@ -918,27 +810,25 @@ local function setupCharacter(newCharacter)
 					return
 				end
 
-				local currentTargetCharacter =
+				local targetModel =
 					targetPlayer.Character
 
-				if not currentTargetCharacter then
+				if not targetModel then
 					return
 				end
 
-				local touchedModel =
+				local hitModel =
 					hit:FindFirstAncestorOfClass(
 						"Model"
 					)
 
-				if touchedModel ==
-					currentTargetCharacter then
+				if hitModel == targetModel then
 
-					-- Unlock
 					followLocked = false
 					following = true
 
-					lastMovePosition = nil
-					targetJumpCooldown = false
+					lastMove = nil
+					targetJumpDebounce = false
 
 					followButton.Text = "STOP"
 					followButton.BackgroundColor3 =
@@ -958,7 +848,7 @@ local function setupCharacter(newCharacter)
 end
 
 --==================================================
--- CHARACTER EVENTS
+-- CHARACTER ADDED
 --==================================================
 
 if player.Character then
@@ -967,11 +857,8 @@ end
 
 player.CharacterAdded:Connect(function(newCharacter)
 
-	-- The old character is gone.
-	-- Set up the new one cleanly.
 	setupCharacter(newCharacter)
 
-	-- If we are locked, don't automatically follow.
 	if followLocked then
 		following = false
 	end
@@ -982,8 +869,8 @@ end)
 --==================================================
 
 local dragging = false
-local dragStart = nil
-local startPosition = nil
+local dragStart
+local startPosition
 
 title.InputBegan:Connect(function(input)
 
